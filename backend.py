@@ -120,6 +120,21 @@ def build_policy(ctx: AccessContext) -> Policy:
         notes="Pharmacy should primarily analyze clinical/utilization info. Patient PII is blocked.",
     )
 
+    # admin
+    if ctx.role == "admin":
+    return Policy(
+        role="admin",
+        scope_filter_hint=(
+            "Admin rule: Full access to all tables and rows. "
+            "No row-level scope filters required."
+        ),
+        required_filter_column=None,
+        required_filter_value=None,
+        blocked_patient_columns=set(),
+        notes="Admin can access all data (including patient-level and PII).",
+    )
+
+
 # ---------------- DB SETUP ----------------
 
 def init_engine():
@@ -546,3 +561,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
