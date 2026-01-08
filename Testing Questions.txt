@@ -1,0 +1,3 @@
+Show the total bill amount per patient and analyze the distribution.
+Show the number of patients by province.
+Show how many appointments each doctor has and analyze the pattern.
