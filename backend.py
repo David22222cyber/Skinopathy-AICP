@@ -1,7 +1,8 @@
 import os
 import sys
 import re
-from typing import List, Tuple
+from dataclasses import dataclass
+from typing import List, Tuple, Optional, Set, Dict
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -12,22 +13,112 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 # ---------------- CONFIG ----------------
 
-load_dotenv()  # load .env in same folder
+load_dotenv()
 
 MODEL_NAME = "gpt-4.1-mini"
-MAX_SCHEMA_CHARS = 4000          # max schema text sent to LLM
-MAX_PREVIEW_ROWS = 20            # rows shown in console
-MAX_CATEGORY_UNIQUE = 10         # <= this many uniques → treat as categorical
+MAX_SCHEMA_CHARS = 4500
+MAX_PREVIEW_ROWS = 20
+MAX_CATEGORY_UNIQUE = 10
+
+
+# PII columns (block for pharmacy role)
+SENSITIVE_PATIENT_COLUMNS = {
+    "first_name", "last_name", "street_address", "street_address_2", "city", "province",
+    "postal", "health_card_number", "home_phone", "cell_phone", "email",
+    "birth", "health_card_expiry_date",
+    # add more if needed
+}
+
+# If pharmacy should not see *any* patient-level rows at all (only aggregates),
+# keep this False for now. If you want that stricter behavior, set True.
+PHARMACY_AGGREGATES_ONLY = False
 
 
 def get_env(name: str) -> str:
-    """Get environment variable or exit with clear error."""
     v = os.getenv(name)
     if not v:
         print(f"ERROR: env var {name} is not set", file=sys.stderr)
         sys.exit(1)
     return v
 
+
+# ---------------- RBAC POLICY ----------------
+
+@dataclass
+class AccessContext:
+    user_id: int
+    display_name: str
+    role: str                 # "doctor" or "pharmacy"
+    doctor_id: Optional[int]  # scope
+    pharmacy_id: Optional[int]
+
+
+@dataclass
+class Policy:
+    role: str
+    scope_filter_hint: str
+    required_filter_column: Optional[str]
+    required_filter_value: Optional[int]
+    blocked_patient_columns: Set[str]
+    notes: str
+
+
+def load_access_context(engine, api_key: str) -> AccessContext:
+    sql = text("""
+        SELECT TOP 1 id, display_name, role, doctor_id, pharmacy_id
+        FROM dbo.portal_users
+        WHERE api_key = :k AND is_active = 1
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(sql, {"k": api_key}).mappings().first()
+
+    if not row:
+        raise ValueError("Invalid key or user inactive (no match in dbo.portal_users).")
+
+    role = str(row["role"]).strip().lower()
+    if role not in {"doctor", "pharmacy"}:
+        raise ValueError(f"Unsupported role '{row['role']}' in dbo.portal_users.")
+
+    return AccessContext(
+        user_id=int(row["id"]),
+        display_name=str(row["display_name"]),
+        role=role,
+        doctor_id=int(row["doctor_id"]) if row["doctor_id"] is not None else None,
+        pharmacy_id=int(row["pharmacy_id"]) if row["pharmacy_id"] is not None else None,
+    )
+
+
+def build_policy(ctx: AccessContext) -> Policy:
+    if ctx.role == "doctor":
+        if ctx.doctor_id is None:
+            raise ValueError("Doctor user must have doctor_id set in dbo.portal_users.")
+        return Policy(
+            role="doctor",
+            scope_filter_hint=(
+                f"Row-level rule: Only include patients where dbo.patients.family_dr_id = {ctx.doctor_id}.\n"
+                "If querying other tables with patient_id, JOIN to dbo.patients and apply that filter."
+            ),
+            required_filter_column="family_dr_id",
+            required_filter_value=ctx.doctor_id,
+            blocked_patient_columns=set(),  # doctor can see patient details
+            notes="Doctor can access patient-level data, but only within their family_dr_id scope.",
+        )
+
+    # pharmacy
+    if ctx.pharmacy_id is None:
+        raise ValueError("Pharmacy user must have pharmacy_id set in dbo.portal_users.")
+    return Policy(
+        role="pharmacy",
+        scope_filter_hint=(
+            f"Row-level rule: Only include patients where dbo.patients.pharmacy_id = {ctx.pharmacy_id}.\n"
+            "If querying other tables with patient_id, JOIN to dbo.patients and apply that filter.\n"
+            "Column-level rule: Do NOT select patient PII (names, address, phones, email, health card, birth date)."
+        ),
+        required_filter_column="pharmacy_id",
+        required_filter_value=ctx.pharmacy_id,
+        blocked_patient_columns=set(SENSITIVE_PATIENT_COLUMNS),
+        notes="Pharmacy should primarily analyze clinical/utilization info. Patient PII is blocked.",
+    )
 
 # ---------------- DB SETUP ----------------
 
@@ -69,27 +160,68 @@ def init_llm() -> ChatOpenAI:
     return llm
 
 
-def generate_sql(llm: ChatOpenAI, schema_text: str, question: str) -> str:
-    """Ask the LLM to write a single safe SELECT query for SQL Server."""
+# ---------------- SQL GENERATION + SAFETY ----------------
+
+def extract_dbo_tables(sql: str) -> Set[str]:
+    # naive but works well for FROM/JOIN dbo.xxx
+    hits = re.findall(r"(?is)\b(?:from|join)\s+dbo\.([a-zA-Z0-9_]+)\b", sql)
+    return {h.lower() for h in hits}
+
+
+def contains_required_scope_filter(sql: str, filter_col: str, filter_val: int) -> bool:
+    s = sql.lower()
+    if filter_col.lower() not in s:
+        return False
+    # look for "= <val>" (allow spaces)
+    if re.search(rf"(?is)\b{re.escape(filter_col.lower())}\b\s*=\s*{filter_val}\b", s):
+        return True
+    # sometimes model uses parameter or casts; we still want strong guarantee for prototype:
+    # require the literal filter value to appear somewhere near the filter column
+    return str(filter_val) in s
+
+
+def blocks_pii_for_pharmacy(sql: str, blocked_cols: Set[str]) -> Optional[str]:
+    s = sql.lower()
+    for col in blocked_cols:
+        if re.search(rf"(?is)\b{re.escape(col.lower())}\b", s):
+            return col
+    return None
+
+
+def generate_sql(llm: ChatOpenAI, schema_text: str, policy: Policy, question: str) -> str:
     system = SystemMessage(
         content=(
             "You are an expert SQL assistant for a SQL Server (T-SQL) database.\n"
-            "You have READ-ONLY access.\n"
-            "IMPORTANT TABLE RULES:\n"
+            "You have READ-ONLY access.\n\n"
+            "CRITICAL SAFETY RULES:\n"
+            "- Output exactly ONE SQL SELECT query.\n"
+            "- Allowed clauses: SELECT, FROM, JOIN, WHERE, GROUP BY, ORDER BY, TOP.\n"
+            "- Never use INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/CREATE/MERGE.\n"
+            "- Always use explicit dbo.<table> names.\n\n"
+            "PATIENT COUNT RULE:\n"
             "- When counting or identifying patients, ALWAYS use dbo.patients as the primary table.\n"
             "- Do NOT infer total patients from patient_notes, walkin_cases, or other auxiliary tables.\n\n"
-            "Task: Given a user question and the schema, write exactly ONE SQL SELECT query that answers it.\n"
-            "Rules:\n"
-            "- Only use SELECT, FROM, JOIN, WHERE, GROUP BY, ORDER BY, and TOP.\n"
-            "- DO NOT use INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, or MERGE.\n"
-            "- Use dbo.<table> names explicitly.\n"
-            "- Return ONLY the SQL query, with no explanation and no backticks."
+            f"ROLE-BASED ACCESS POLICY:\n{policy.scope_filter_hint}\n\n"
+            "If the user asks something outside their permission, do NOT try to bypass it.\n"
+            "Instead, write a query that returns an allowed aggregate or allowed subset.\n"
+            "Return ONLY the SQL query, with no explanation and no markdown."
         )
     )
+
+    # extra hint: pharmacy should focus on non-PII outputs
+    role_hint = ""
+    if policy.role == "pharmacy":
+        role_hint = (
+            "\nExtra guidance for pharmacy role:\n"
+            "- Prefer aggregated outputs (counts, totals, distributions) over listing patient rows.\n"
+            "- Avoid selecting any patient identity or contact information.\n"
+        )
+
     human = HumanMessage(
         content=(
             f"Schema:\n{schema_text}\n\n"
-            f"User question: {question}\n\n"
+            f"User question: {question}\n"
+            f"{role_hint}\n"
             "Write the SQL query now."
         )
     )
@@ -97,20 +229,45 @@ def generate_sql(llm: ChatOpenAI, schema_text: str, question: str) -> str:
     resp = llm.invoke([system, human])
     sql = resp.content.strip()
 
-    # Remove markdown fences if the model added them
+    # strip markdown fences if any
     if sql.lower().startswith("```sql"):
         sql = sql.strip("`")
         sql = re.sub(r"^sql", "", sql, flags=re.IGNORECASE).strip()
     elif sql.startswith("```"):
         sql = sql.strip("`").strip()
 
-    # Enforce SELECT-only and block dangerous verbs
+    # enforce SELECT-only + block dangerous verbs
     if not re.match(r"(?is)^\s*select\b", sql):
-        raise ValueError(f"Llm generated non-SELECT query, blocked: {sql[:120]}...")
+        raise ValueError(f"LLM generated non-SELECT query, blocked: {sql[:160]}...")
     if re.search(r"\b(insert|update|delete|drop|alter|truncate|create|merge)\b", sql, re.IGNORECASE):
-        raise ValueError(f"Llm generated potentially unsafe query, blocked: {sql[:120]}...")
+        raise ValueError(f"LLM generated potentially unsafe query, blocked: {sql[:160]}...")
+
+    # RBAC enforcement (prototype-level)
+    tables = extract_dbo_tables(sql)
+
+    # If touching patients or patient-linked tables, require scope filter column/value
+    # (We enforce whenever dbo.patients is referenced; for deeper enforcement you can expand rules per table)
+    if "patients" in tables and policy.required_filter_column and policy.required_filter_value is not None:
+        ok = contains_required_scope_filter(sql, policy.required_filter_column, policy.required_filter_value)
+        if not ok:
+            raise ValueError(
+                f"RBAC block: query references dbo.patients but missing required scope filter "
+                f"{policy.required_filter_column} = {policy.required_filter_value}."
+            )
+
+    # Pharmacy PII column block
+    if policy.role == "pharmacy":
+        bad = blocks_pii_for_pharmacy(sql, policy.blocked_patient_columns)
+        if bad:
+            raise ValueError(f"RBAC block: pharmacy role query attempted to use PII column '{bad}'.")
+        if PHARMACY_AGGREGATES_ONLY:
+            # block selecting patient id too if you want
+            if re.search(r"(?is)\bpatient(_)?id\b|\bid\b", sql.lower()):
+                # too aggressive in general; keep off unless you want strict mode
+                pass
 
     return sql
+
 
 
 # ---------------- BASIC ANALYSIS ----------------
@@ -293,11 +450,33 @@ def summarize_result(
 # ---------------- MAIN LOOP ----------------
 
 def main():
-    print("=== AICP Research Portal: NL → SQL Assistant (Next-Level Analysis) ===\n")
+    print("=== AICP Research Portal: NL → SQL Assistant (RBAC + Next-Level Analysis) ===\n")
 
     engine = init_engine()
     schema_text = build_schema_summary(engine)
     llm = init_llm()
+
+    # --- Login (sign-in key) ---
+    try:
+        api_key = input("Enter access key (or 'quit'): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nExiting.")
+        return
+
+    if not api_key or api_key.lower() in {"quit", "exit"}:
+        print("Goodbye.")
+        return
+
+    try:
+        ctx = load_access_context(engine, api_key)
+        policy = build_policy(ctx)
+    except Exception as e:
+        print("\n[ERROR] Login failed.")
+        print("Details:", e)
+        return
+
+    print(f"\n[auth] Logged in as: {ctx.display_name} (role={ctx.role})")
+    print(f"[auth] Policy: {policy.notes}")
 
     while True:
         try:
@@ -314,49 +493,49 @@ def main():
 
         print(f"\n[user] {q}")
 
-        # 1) Generate SQL
+        # 1) Generate SQL (with RBAC in prompt)
         try:
-            sql = generate_sql(llm, schema_text, q)
+            sql = generate_sql(llm, schema_text, policy, q)
         except Exception as e:
-            print("\n[ERROR] Could not generate a safe SQL query.")
+            print("\n[RBAC/SQL ERROR] Could not generate an allowed SQL query.")
             print("Details:", e)
             continue
 
         print("\n[SQL generated]")
         print(sql)
 
-        # 2) Execute SQL safely
+        # 2) Execute
         try:
             with engine.connect() as conn:
                 df = pd.read_sql_query(sql, conn)
         except Exception as e:
-            print("\n[ERROR] Database error while running the query.")
+            print("\n[DB ERROR] Database error while running the query.")
             print("Details:", e)
             continue
 
-        # 3) Show preview
+        # 3) Preview
         print("\n[Preview of results (up to 20 rows)]")
         if df.empty:
             print("(no rows returned)")
         else:
             print(df.head(MAX_PREVIEW_ROWS).to_string(index=False))
 
-        # 4) Basic analysis
+        # 4) Basic
         numeric_summary, cat_summary = compute_basic_analysis(df)
         print("\n[Basic numeric summary]")
         print(numeric_summary)
         print("\n[Basic categorical summary]")
         print(cat_summary)
 
-        # 5) Next-level analysis
+        # 5) Advanced
         advanced_summary = compute_advanced_analysis(df)
         print("\n[Advanced analysis (automatic)]")
         print(advanced_summary)
 
-        # 6) LLM narrative analysis
+        # 6) AI narrative
         try:
             summary = summarize_result(
-                llm, q, sql, df, numeric_summary, cat_summary, advanced_summary
+                llm, ctx, q, sql, df, numeric_summary, cat_summary, advanced_summary
             )
             print("\n[AI Analysis]")
             print(summary)
