@@ -184,6 +184,95 @@ def seed_pharmacies(conn, n=NUM_PHARMACIES):
     conn.execute(pharmacies.insert(), rows)
     pharmacy_ids = conn.execute(select(pharmacies.c.id)).scalars().all()
     return pharmacy_ids
+# ------------------------------
+# Optional: App user / role table seeding (for RBAC demo)
+# We keep this flexible because your table name / columns may evolve.
+# The generator will auto-detect a supported auth table and seed:
+#   - 1 admin user (can view all)
+#   - 1 user per doctor (role=doctor, scoped to that doctor)
+#   - 1 user per pharmacy (role=pharmacy, scoped to that pharmacy)
+# ------------------------------
+
+AUTH_TABLE_CANDIDATES = [
+    "app_users",
+    "users",
+    "portal_users",
+    "user_access",
+    "user_permissions",
+    "auth_users",
+]
+
+def try_load_auth_table(engine, metadata, schema="dbo"):
+    """Return (table_name, Table) if one of the candidate auth tables exists, else (None, None)."""
+    insp = inspect(engine)
+    existing = set(insp.get_table_names(schema=schema))
+    for name in AUTH_TABLE_CANDIDATES:
+        if name in existing:
+            return name, Table(name, metadata, autoload_with=engine, schema=schema)
+    return None, None
+
+def _pick_col(table, *candidates):
+    cols = set(table.columns.keys())
+    for c in candidates:
+        if c in cols:
+            return c
+    return None
+
+def _filter_row_to_table(table, row):
+    cols = set(table.columns.keys())
+    return {k: v for k, v in row.items() if k in cols}
+
+def seed_app_users(conn, auth_table, doctor_ids, pharmacy_ids):
+    """Seed minimal auth users for testing RBAC."""
+    if auth_table is None:
+        return
+
+    # Column name guesses (works even if you rename later).
+    col_key = _pick_col(auth_table, "api_key", "sign_in_key", "access_key", "key", "token")
+    col_role = _pick_col(auth_table, "role", "user_role", "access_type")
+    col_doctor = _pick_col(auth_table, "doctor_id", "family_dr_id", "provider_id")
+    col_pharmacy = _pick_col(auth_table, "pharmacy_id")
+    col_name = _pick_col(auth_table, "display_name", "name", "username")
+    col_email = _pick_col(auth_table, "email")
+
+    def make_key():
+        # UUID4 hex is portable and easy to paste in terminals for demo
+        return uuid.uuid4().hex
+
+    rows = []
+
+    # 1) Admin user (view all)
+    admin_row = {}
+    if col_key: admin_row[col_key] = make_key()
+    if col_role: admin_row[col_role] = "admin"
+    if col_name: admin_row[col_name] = "Admin User"
+    if col_email: admin_row[col_email] = "admin@demo.local"
+    rows.append(_filter_row_to_table(auth_table, admin_row))
+
+    # 2) Doctor users (scoped)
+    for did in doctor_ids:
+        r = {}
+        if col_key: r[col_key] = make_key()
+        if col_role: r[col_role] = "doctor"
+        if col_doctor: r[col_doctor] = did
+        if col_name: r[col_name] = f"Doctor {did}"
+        if col_email: r[col_email] = f"doctor{did}@demo.local"
+        rows.append(_filter_row_to_table(auth_table, r))
+
+    # 3) Pharmacy users (scoped)
+    for pid in pharmacy_ids:
+        r = {}
+        if col_key: r[col_key] = make_key()
+        if col_role: r[col_role] = "pharmacy"
+        if col_pharmacy: r[col_pharmacy] = pid
+        if col_name: r[col_name] = f"Pharmacy {pid}"
+        if col_email: r[col_email] = f"pharmacy{pid}@demo.local"
+        rows.append(_filter_row_to_table(auth_table, r))
+
+    # Insert (skip empty dict rows if a table has unexpected required cols)
+    rows = [r for r in rows if r]
+    if rows:
+        conn.execute(insert(auth_table), rows)
 
 
 def seed_patients(conn, doctor_ids, pharmacy_ids, n=NUM_PATIENTS):
@@ -603,6 +692,14 @@ def main():
 
         print("Seeding pharmacies...")
         pharmacy_ids = seed_pharmacies(conn)
+
+        # Optional: seed app users / roles if the auth table exists
+        auth_name, auth_table = try_load_auth_table(engine, metadata)
+        if auth_table is not None:
+            print(f"Seeding auth users (RBAC demo) into dbo.{auth_name}...")
+            seed_app_users(conn, auth_table, doctor_ids, pharmacy_ids)
+        else:
+            print("No auth table detected, skipping RBAC user seeding.")
 
         print("Seeding patients...")
         patient_ids = seed_patients(conn, doctor_ids, pharmacy_ids)
