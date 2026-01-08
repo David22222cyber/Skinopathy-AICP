@@ -406,8 +406,34 @@ CREATE TABLE dbo.portal_users (
   created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
 );
 
--- Example users (replace ids with real ones)
-INSERT INTO dbo.portal_users (display_name, api_key, role, doctor_id, pharmacy_id)
-VALUES
-('Demo Doctor',   'DOC-KEY-123', 'doctor',   8,  NULL),
-('Demo Pharmacy', 'PHA-KEY-456', 'pharmacy', NULL, 3);
+---------------------------------------------------------------------------------------------------------------
+--run below after mock data generation to link the doctor/pharmacy's id and real name to the portal user table
+---------------------------------------------------------------------------------------------------------------
+WITH numbered_doctors AS (
+    SELECT id, first_name, last_name,
+           ROW_NUMBER() OVER (ORDER BY id) AS rn
+    FROM dbo.address_book_doctors
+)
+UPDATE pu
+SET pu.doctor_id = nd.id,
+    pu.display_name = CONCAT('Dr ', nd.first_name, ' ', nd.last_name)
+FROM dbo.portal_users pu
+JOIN numbered_doctors nd
+  ON pu.display_name = CONCAT('Doctor ', nd.rn)
+WHERE pu.role = 'doctor';
+
+
+
+
+WITH numbered_pharmacies AS (
+    SELECT id, name,
+           ROW_NUMBER() OVER (ORDER BY id) AS rn
+    FROM dbo.pharmacies
+)
+UPDATE pu
+SET pu.pharmacy_id = np.id,
+    pu.display_name = np.name
+FROM dbo.portal_users pu
+JOIN numbered_pharmacies np
+  ON pu.display_name = CONCAT('Pharmacy ', np.rn)
+WHERE pu.role = 'pharmacy';
