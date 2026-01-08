@@ -89,9 +89,11 @@ def load_access_context(engine, api_key: str) -> AccessContext:
 
 
 def build_policy(ctx: AccessContext) -> Policy:
+    # doctor
     if ctx.role == "doctor":
         if ctx.doctor_id is None:
             raise ValueError("Doctor user must have doctor_id set in dbo.portal_users.")
+
         return Policy(
             role="doctor",
             scope_filter_hint=(
@@ -105,35 +107,39 @@ def build_policy(ctx: AccessContext) -> Policy:
         )
 
     # pharmacy
-    if ctx.pharmacy_id is None:
-        raise ValueError("Pharmacy user must have pharmacy_id set in dbo.portal_users.")
-    return Policy(
-        role="pharmacy",
-        scope_filter_hint=(
-            f"Row-level rule: Only include patients where dbo.patients.pharmacy_id = {ctx.pharmacy_id}.\n"
-            "If querying other tables with patient_id, JOIN to dbo.patients and apply that filter.\n"
-            "Column-level rule: Do NOT select patient PII (names, address, phones, email, health card, birth date)."
-        ),
-        required_filter_column="pharmacy_id",
-        required_filter_value=ctx.pharmacy_id,
-        blocked_patient_columns=set(SENSITIVE_PATIENT_COLUMNS),
-        notes="Pharmacy should primarily analyze clinical/utilization info. Patient PII is blocked.",
-    )
+    if ctx.role == "pharmacy":
+        if ctx.pharmacy_id is None:
+            raise ValueError("Pharmacy user must have pharmacy_id set in dbo.portal_users.")
+
+        return Policy(
+            role="pharmacy",
+            scope_filter_hint=(
+                f"Row-level rule: Only include patients where dbo.patients.pharmacy_id = {ctx.pharmacy_id}.\n"
+                "If querying other tables with patient_id, JOIN to dbo.patients and apply that filter.\n"
+                "Column-level rule: Do NOT select patient PII (names, address, phones, email, health card, birth date)."
+            ),
+            required_filter_column="pharmacy_id",
+            required_filter_value=ctx.pharmacy_id,
+            blocked_patient_columns=set(SENSITIVE_PATIENT_COLUMNS),
+            notes="Pharmacy should primarily analyze clinical/utilization info. Patient PII is blocked.",
+        )
 
     # admin
     if ctx.role == "admin":
-    return Policy(
-        role="admin",
-        scope_filter_hint=(
-            "Admin rule: Full access to all tables and rows. "
-            "No row-level scope filters required."
-        ),
-        required_filter_column=None,
-        required_filter_value=None,
-        blocked_patient_columns=set(),
-        notes="Admin can access all data (including patient-level and PII).",
-    )
+        return Policy(
+            role="admin",
+            scope_filter_hint=(
+                "Admin rule: Full access to all tables and rows. "
+                "No row-level scope filters required."
+            ),
+            required_filter_column=None,
+            required_filter_value=None,
+            blocked_patient_columns=set(),
+            notes="Admin can access all data (including patient-level and PII).",
+        )
 
+    # fallback
+    raise ValueError(f"Unknown role: {ctx.role}")
 
 # ---------------- DB SETUP ----------------
 
@@ -561,4 +567,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
