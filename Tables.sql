@@ -392,4 +392,22 @@ CREATE TABLE dbo.submissions (
     CONSTRAINT fk_submissions_patient
         FOREIGN KEY (patient_id) REFERENCES dbo.patients(id)
 );
+
 GO
+
+CREATE TABLE dbo.portal_users (
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  display_name NVARCHAR(100) NOT NULL,
+  api_key NVARCHAR(128) NOT NULL UNIQUE,  -- demo: store plain; production: store hash
+  role NVARCHAR(30) NOT NULL,             -- 'doctor' or 'pharmacy'
+  doctor_id INT NULL,                     -- scope for doctor
+  pharmacy_id INT NULL,                   -- scope for pharmacy
+  is_active BIT NOT NULL DEFAULT 1,
+  created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
+);
+
+-- Example users (replace ids with real ones)
+INSERT INTO dbo.portal_users (display_name, api_key, role, doctor_id, pharmacy_id)
+VALUES
+('Demo Doctor',   'DOC-KEY-123', 'doctor',   8,  NULL),
+('Demo Pharmacy', 'PHA-KEY-456', 'pharmacy', NULL, 3);
