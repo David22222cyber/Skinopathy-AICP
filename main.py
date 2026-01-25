@@ -76,7 +76,7 @@ def load_access_context(engine, api_key: str) -> AccessContext:
         raise ValueError("Invalid key or user inactive (no match in dbo.portal_users).")
 
     role = str(row["role"]).strip().lower()
-    if role not in {"doctor", "pharmacy"}:
+    if role not in {"doctor", "pharmacy", "admin"}:
         raise ValueError(f"Unsupported role '{row['role']}' in dbo.portal_users.")
 
     return AccessContext(
@@ -567,5 +567,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
