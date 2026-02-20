@@ -562,7 +562,7 @@ def main():
         # 6) AI narrative
         try:
             summary = summarize_result(
-                llm, ctx, q, sql, df, numeric_summary, cat_summary, advanced_summary
+                llm, q, sql, df, numeric_summary, cat_summary, advanced_summary
             )
             print("\n[AI Analysis]")
             print(summary)
@@ -573,6 +573,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
