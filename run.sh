@@ -14,19 +14,19 @@ if [ ! -f .env ]; then
 fi
 
 # Check if virtual environment exists
-if [ ! -d "venv" ]; then
+if [ ! -d ".venv" ]; then
     echo "Virtual environment not found. Creating one..."
-    python3 -m venv venv
+    python3 -m venv .venv
 fi
 
 # Activate virtual environment
 echo "Activating virtual environment..."
-source venv/bin/activate
+source .venv/bin/activate
 
 # Install/update dependencies
 echo "Installing dependencies..."
-pip install -r requirements-api.txt --quiet
+pip install -r requirements.txt --quiet
 
 # Run the API server
 echo "Starting API server..."
-python api_server.py
+python run_api.py
