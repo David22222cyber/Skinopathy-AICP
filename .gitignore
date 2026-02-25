@@ -42,7 +42,6 @@ venv.bak/
 *.swp
 *.swo
 *~
-.DS_Store
 *.code-workspace
 
 # Jupyter Notebook
