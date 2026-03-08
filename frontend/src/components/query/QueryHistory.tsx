@@ -13,7 +13,7 @@ export default function QueryHistory() {
   if (history.length === 0) return null;
 
   return (
-    <Paper sx={{ p: 3 }}>
+    <Paper variant="outlined" sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
         <Typography variant="h6">Query History</Typography>
         <IconButton size="small" sx={{ ml: 'auto' }} onClick={() => dispatch(clearHistory())}>

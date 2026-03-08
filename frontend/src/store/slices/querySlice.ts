@@ -1,6 +1,20 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import { queryService } from '../../services/queryService';
+import { HISTORY_KEY } from '../../config';
 import type { QueryRequest, QueryResponse, QueryHistoryItem } from '../../types';
+
+function loadHistory(): QueryHistoryItem[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(history: QueryHistoryItem[]) {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+}
 
 interface QueryState {
   result: QueryResponse | null;
@@ -13,7 +27,7 @@ const initialState: QueryState = {
   result: null,
   loading: false,
   error: null,
-  history: [],
+  history: loadHistory(),
 };
 
 export const executeQuery = createAsyncThunk(
@@ -40,6 +54,7 @@ const querySlice = createSlice({
     },
     clearHistory(state) {
       state.history = [];
+      saveHistory([]);
     },
   },
   extraReducers: (builder) => {
@@ -59,6 +74,7 @@ const querySlice = createSlice({
           executionTime: action.payload.execution_time_ms,
         });
         if (state.history.length > 50) state.history.pop();
+        saveHistory(state.history);
       })
       .addCase(executeQuery.rejected, (state, action) => {
         state.loading = false;

@@ -13,7 +13,7 @@ export default function QueryResult() {
   };
 
   return (
-    <Paper sx={{ p: 3, mb: 3 }}>
+    <Paper variant="outlined" sx={{ p: 3, mb: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 1, flexWrap: 'wrap' }}>
         <Typography variant="h6">Results</Typography>
         <Chip label={`${result.row_count} rows`} size="small" color="primary" />
@@ -24,11 +24,11 @@ export default function QueryResult() {
 
       {/* AI Summary */}
       {result.analysis?.ai_summary && (
-        <Box sx={{ mb: 3, p: 2, bgcolor: 'primary.50', borderRadius: 2, border: '1px solid', borderColor: 'primary.100' }}>
+        <Box sx={{ mb: 3, p: 2.5, bgcolor: '#e3f2fd', borderRadius: 2, border: '1px solid', borderColor: '#bbdefb' }}>
           <Typography variant="subtitle2" color="primary.main" sx={{ mb: 1 }}>
             AI Analysis
           </Typography>
-          <Typography variant="body2">{result.analysis.ai_summary}</Typography>
+          <Typography variant="body2" sx={{ lineHeight: 1.7 }}>{result.analysis.ai_summary}</Typography>
         </Box>
       )}
 
