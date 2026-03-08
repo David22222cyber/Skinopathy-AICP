@@ -19,7 +19,7 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem(TOKEN_KEY);
-      window.location.href = '/login';
+      localStorage.removeItem('aicp_expires_at');
     }
     return Promise.reject(error);
   }
