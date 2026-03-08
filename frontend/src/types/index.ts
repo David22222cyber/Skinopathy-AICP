@@ -85,6 +85,26 @@ export interface HealthResponse {
   active_sessions: number;
 }
 
+export interface ApiInfoResponse {
+  service: string;
+  version: string;
+  status: string;
+  endpoints: Record<string, string>;
+}
+
+export interface SessionInfo {
+  user_id: number;
+  display_name: string;
+  role: string;
+  created_at: string;
+  last_activity: string;
+}
+
+export interface SessionsResponse {
+  active_sessions: number;
+  sessions: SessionInfo[];
+}
+
 export interface QueryHistoryItem {
   id: string;
   question: string;
