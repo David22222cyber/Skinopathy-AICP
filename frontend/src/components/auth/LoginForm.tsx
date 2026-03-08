@@ -34,7 +34,7 @@ export default function LoginForm() {
         px: 2,
       }}
     >
-      <Card elevation={3} sx={{ width: '100%', maxWidth: 440 }}>
+      <Card variant="outlined" sx={{ width: '100%', maxWidth: 440 }}>
         <CardContent sx={{ p: 4 }}>
           <Box sx={{ textAlign: 'center', mb: 3 }}>
             <VpnKey sx={{ fontSize: 48, color: 'primary.main', mb: 1 }} />
