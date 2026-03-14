@@ -119,7 +119,7 @@ export default function AppLayout() {
                 </MenuItem>
                 <MenuItem onClick={handleLogout}>
                   <ListItemIcon><Logout fontSize="small" /></ListItemIcon>
-                  Logout
+                  <ListItemText primary="Logout" secondary="Sign in as another user" />
                 </MenuItem>
               </Menu>
             </>

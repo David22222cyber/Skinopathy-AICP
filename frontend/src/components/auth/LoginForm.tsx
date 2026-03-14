@@ -87,6 +87,9 @@ export default function LoginForm() {
           </form>
 
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2, textAlign: 'center' }}>
+            Use a different API key to sign in as another doctor or role.
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, textAlign: 'center' }}>
             Contact your administrator if you don't have an API key.
           </Typography>
         </CardContent>
