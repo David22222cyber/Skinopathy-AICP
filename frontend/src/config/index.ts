@@ -4,3 +4,5 @@ export const EXPIRY_KEY = 'aicp_expires_at';
 export const HISTORY_KEY = 'aicp_query_history';
 export const APP_NAME = 'Skinopathy Research Portal';
 export const MAX_RESULTS_DEFAULT = 100;
+/** Request timeout for /api/query (ms). Prevents UI from staying stuck if backend hangs. */
+export const QUERY_TIMEOUT_MS = 120_000;

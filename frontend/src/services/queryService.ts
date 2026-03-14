@@ -1,8 +1,12 @@
 import api from './api';
+import { QUERY_TIMEOUT_MS } from '../config';
 import type { QueryRequest, QueryResponse, SchemaResponse, HealthResponse, ApiInfoResponse, SessionsResponse } from '../types';
 
-export async function executeQuery(data: QueryRequest): Promise<QueryResponse> {
-  const response = await api.post<QueryResponse>('/api/query', data);
+export async function executeQuery(data: QueryRequest, signal?: AbortSignal): Promise<QueryResponse> {
+  const response = await api.post<QueryResponse>('/api/query', data, {
+    timeout: QUERY_TIMEOUT_MS,
+    signal,
+  });
   return response.data;
 }
 

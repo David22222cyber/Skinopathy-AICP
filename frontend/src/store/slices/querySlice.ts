@@ -3,6 +3,9 @@ import { queryService } from '../../services/queryService';
 import { HISTORY_KEY } from '../../config';
 import type { QueryRequest, QueryResponse, QueryHistoryItem } from '../../types';
 
+/** Payload for executeQuery: request body plus optional AbortSignal for cancellation. */
+export type ExecuteQueryArg = QueryRequest & { signal?: AbortSignal };
+
 function loadHistory(): QueryHistoryItem[] {
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
@@ -32,13 +35,21 @@ const initialState: QueryState = {
 
 export const executeQuery = createAsyncThunk(
   'query/execute',
-  async (data: QueryRequest, { rejectWithValue }) => {
+  async (arg: ExecuteQueryArg, { rejectWithValue, signal: thunkSignal }) => {
+    const { signal: argSignal, ...data } = arg;
+    const signal = argSignal ?? thunkSignal;
     try {
-      return await queryService.executeQuery(data);
+      return await queryService.executeQuery(data, signal);
     } catch (err: unknown) {
-      const error = err as { response?: { data?: { error?: string; details?: string } } };
+      const e = err as { code?: string; message?: string; response?: { data?: { error?: string; details?: string } } };
+      if (e.code === 'ERR_CANCELED' || signal?.aborted) {
+        return rejectWithValue('Query cancelled.');
+      }
+      if (e.code === 'ECONNABORTED') {
+        return rejectWithValue('Query timed out. The request took too long.');
+      }
       return rejectWithValue(
-        error.response?.data?.details || error.response?.data?.error || 'Query failed'
+        e.response?.data?.details || e.response?.data?.error || 'Query failed'
       );
     }
   }

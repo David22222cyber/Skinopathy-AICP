@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   Box, TextField, Button, Paper, Typography, Slider,
   FormControlLabel, Switch, CircularProgress, Alert, InputAdornment,
 } from '@mui/material';
-import { Send, Search } from '@mui/icons-material';
+import { Send, Search, Cancel } from '@mui/icons-material';
 import { useAppDispatch, useAppSelector } from '../../hooks/useStore';
 import { executeQuery } from '../../store/slices/querySlice';
 
@@ -11,13 +11,33 @@ export default function QueryInput() {
   const [question, setQuestion] = useState('');
   const [includeSql, setIncludeSql] = useState(true);
   const [maxRows, setMaxRows] = useState(100);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const dispatch = useAppDispatch();
   const { loading, error } = useAppSelector((s) => s.query);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!question.trim() || loading) return;
-    dispatch(executeQuery({ question: question.trim(), include_sql: includeSql, max_rows: maxRows }));
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const trimmed = question.trim();
+    dispatch(
+      executeQuery({
+        question: trimmed,
+        include_sql: includeSql,
+        max_rows: maxRows,
+        signal: controller.signal,
+      })
+    ).then((result) => {
+      if (executeQuery.fulfilled.match(result)) {
+        setQuestion('');
+      }
+    });
+  };
+
+  const handleCancel = () => {
+    abortControllerRef.current?.abort();
   };
 
   return (
@@ -40,16 +60,32 @@ export default function QueryInput() {
           slotProps={{
             input: {
               endAdornment: (
-                <InputAdornment position="end">
-                  <Button
-                    type="submit"
-                    variant="contained"
-                    disabled={loading || !question.trim()}
-                    startIcon={loading ? <CircularProgress size={18} color="inherit" /> : <Send />}
-                    sx={{ borderRadius: 2 }}
-                  >
-                    {loading ? 'Running...' : 'Ask'}
-                  </Button>
+                <InputAdornment position="end" sx={{ gap: 0.5 }}>
+                  {loading ? (
+                    <>
+                      <Button
+                        type="button"
+                        variant="outlined"
+                        color="inherit"
+                        onClick={handleCancel}
+                        startIcon={<Cancel fontSize="small" />}
+                        sx={{ borderRadius: 2 }}
+                      >
+                        Cancel
+                      </Button>
+                      <CircularProgress size={20} />
+                    </>
+                  ) : (
+                    <Button
+                      type="submit"
+                      variant="contained"
+                      disabled={!question.trim()}
+                      startIcon={<Send />}
+                      sx={{ borderRadius: 2 }}
+                    >
+                      Ask
+                    </Button>
+                  )}
                 </InputAdornment>
               ),
             },
