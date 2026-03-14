@@ -5,12 +5,13 @@ Flask route handlers for the REST API.
 import os
 import sys
 import traceback
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timedelta
 
 import pandas as pd
 from flask import request, jsonify
 
-from src.config import TOKEN_EXPIRY_HOURS, MAX_RESULTS_RETURN
+from src.config import TOKEN_EXPIRY_HOURS, MAX_RESULTS_RETURN, QUERY_ROUTE_TIMEOUT_SEC
 from src.rbac import load_access_context, build_policy
 from src.sql_generator import generate_sql
 from src.analysis import compute_basic_analysis, compute_advanced_analysis, summarize_result
@@ -123,6 +124,8 @@ def register_routes(app, engine, llm, schema_text):
 
     # ── Query ────────────────────────────────────────────────────────
 
+    _query_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="query")
+
     @app.route("/api/query", methods=["POST"])
     @token_required
     def execute_query():
@@ -144,17 +147,13 @@ def register_routes(app, engine, llm, schema_text):
         policy = session_data["policy"]
         session_data["last_activity"] = datetime.utcnow()
 
-        try:
+        def run_query():
             sql = generate_sql(llm, schema_text, policy, question)
-
             with engine.connect() as conn:
                 df = pd.read_sql_query(sql, conn)
-
             df_limited = df.head(max_rows) if len(df) > max_rows else df
-
             numeric_summary, cat_summary = compute_basic_analysis(df_limited)
             advanced_summary = compute_advanced_analysis(df_limited)
-
             try:
                 ai_summary = summarize_result(
                     llm, question, sql, df_limited,
@@ -163,10 +162,8 @@ def register_routes(app, engine, llm, schema_text):
             except Exception as e:
                 print(f"[WARN] AI summary generation failed: {e}", file=sys.stderr)
                 ai_summary = "AI summary unavailable."
-
             execution_time = (datetime.utcnow() - start_time).total_seconds() * 1000
-
-            response = {
+            result = {
                 "success": True,
                 "question": question,
                 "row_count": len(df),
@@ -184,9 +181,21 @@ def register_routes(app, engine, llm, schema_text):
                 "truncated": len(df) > max_rows,
             }
             if include_sql:
-                response["sql"] = sql
-            return jsonify(response), 200
+                result["sql"] = sql
+            return result
 
+        try:
+            future = _query_executor.submit(run_query)
+            result = future.result(timeout=QUERY_ROUTE_TIMEOUT_SEC)
+            return jsonify(result), 200
+        except FuturesTimeoutError:
+            print(f"[WARN] Query timed out after {QUERY_ROUTE_TIMEOUT_SEC}s", file=sys.stderr)
+            return jsonify({
+                "success": False,
+                "error": "Query timed out",
+                "details": f"The request took longer than {QUERY_ROUTE_TIMEOUT_SEC} seconds.",
+                "question": question,
+            }), 504
         except ValueError as e:
             return jsonify({
                 "success": False,

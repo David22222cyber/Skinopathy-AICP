@@ -31,6 +31,8 @@ PHARMACY_AGGREGATES_ONLY = False
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-secret-key-change-in-production")
 TOKEN_EXPIRY_HOURS = 24
 MAX_RESULTS_RETURN = 1000
+# Max time (seconds) for /api/query handler; prevents stuck LLM/DB from holding the request forever.
+QUERY_ROUTE_TIMEOUT_SEC = int(os.getenv("QUERY_ROUTE_TIMEOUT_SEC", "120"))
 
 
 def get_env(name: str) -> str:
